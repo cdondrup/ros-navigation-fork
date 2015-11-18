@@ -47,7 +47,7 @@ double VelocityCostmapsCostFunction::scoreTrajectory(Trajectory &traj) {
 //        cost = fmax(traj.xv_ * costs_xv_,fabs(traj.thetav_ * costs_tv_));
         cost = traj.xv_ * costs_xv_ + fabs(traj.thetav_ * costs_tv_);
 
-        ROS_INFO("Speed: x: %f, theta: %f, index: (%d, %d) = %d, %d -> costs: %.2f, x: %.2f, t: %.2f", traj.xv_, traj.thetav_, x, y, index_x, index_t, cost, traj.xv_ * costs_xv_, fabs(traj.thetav_ * costs_tv_));
+//        ROS_INFO("Speed: x: %f, theta: %f, index: (%d, %d) = %d, %d -> costs: %.2f, x: %.2f, t: %.2f", traj.xv_, traj.thetav_, x, y, index_x, index_t, cost, traj.xv_ * costs_xv_, fabs(traj.thetav_ * costs_tv_));
         if(pub.getNumSubscribers()){
             pub_map_.data[index_x] = 98; // Just for visualisation, these costs have no effect on the planning
             pub_map_.data[index_t] = 50;
