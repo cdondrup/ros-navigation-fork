@@ -12,7 +12,9 @@ VelocityCostmapsCostFunction::VelocityCostmapsCostFunction() {
     costs_tv_ = 0.0;
 
     ros::NodeHandle nh("~");
-    sub = nh.subscribe("/velocity_costmap_server/map", 10, &VelocityCostmapsCostFunction::callback, this);
+    std::string topic = "/velocity_costmap";
+    nh.param("velocity_costmap_topic", topic, topic);
+    sub = nh.subscribe(topic, 10, &VelocityCostmapsCostFunction::callback, this);
     pub = nh.advertise<nav_msgs::OccupancyGrid>("velocity_costmap", 10);
 }
 
