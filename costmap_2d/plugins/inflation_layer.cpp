@@ -35,9 +35,11 @@
  * Author: Eitan Marder-Eppstein
  *         David V. Lu!!
  *********************************************************************/
+#include <algorithm>
 #include <costmap_2d/inflation_layer.h>
 #include <costmap_2d/costmap_math.h>
 #include <costmap_2d/footprint.h>
+#include <boost/thread.hpp>
 #include <pluginlib/class_list_macros.h>
 
 PLUGINLIB_EXPORT_CLASS(costmap_2d::InflationLayer, costmap_2d::Layer)
@@ -58,14 +60,18 @@ InflationLayer::InflationLayer()
   , seen_(NULL)
   , cached_costs_(NULL)
   , cached_distances_(NULL)
+  , last_min_x_(-std::numeric_limits<float>::max())
+  , last_min_y_(-std::numeric_limits<float>::max())
+  , last_max_x_(std::numeric_limits<float>::max())
+  , last_max_y_(std::numeric_limits<float>::max())
 {
-  access_ = new boost::shared_mutex();
+  inflation_access_ = new boost::recursive_mutex();
 }
 
 void InflationLayer::onInitialize()
 {
   {
-    boost::unique_lock < boost::shared_mutex > lock(*access_);
+    boost::unique_lock < boost::recursive_mutex > lock(*inflation_access_);
     ros::NodeHandle nh("~/" + name_), g_nh;
     current_ = true;
     if (seen_)
@@ -93,14 +99,7 @@ void InflationLayer::onInitialize()
 
 void InflationLayer::reconfigureCB(costmap_2d::InflationPluginConfig &config, uint32_t level)
 {
-  if (weight_ != config.cost_scaling_factor || inflation_radius_ != config.inflation_radius)
-  {
-    inflation_radius_ = config.inflation_radius;
-    cell_inflation_radius_ = cellDistance(inflation_radius_);
-    weight_ = config.cost_scaling_factor;
-    need_reinflation_ = true;
-    computeCaches();
-  }
+  setInflationParameters(config.inflation_radius, config.cost_scaling_factor);
 
   if (enabled_ != config.enabled) {
     enabled_ = config.enabled;
@@ -110,7 +109,7 @@ void InflationLayer::reconfigureCB(costmap_2d::InflationPluginConfig &config, ui
 
 void InflationLayer::matchSize()
 {
-  boost::unique_lock < boost::shared_mutex > lock(*access_);
+  boost::unique_lock < boost::recursive_mutex > lock(*inflation_access_);
   costmap_2d::Costmap2D* costmap = layered_costmap_->getCostmap();
   resolution_ = costmap->getResolution();
   cell_inflation_radius_ = cellDistance(inflation_radius_);
@@ -128,6 +127,10 @@ void InflationLayer::updateBounds(double robot_x, double robot_y, double robot_y
 {
   if (need_reinflation_)
   {
+    last_min_x_ = *min_x;
+    last_min_y_ = *min_y;
+    last_max_x_ = *max_x;
+    last_max_y_ = *max_y;
     // For some reason when I make these -<double>::max() it does not
     // work with Costmap2D::worldToMapEnforceBounds(), so I'm using
     // -<float>::max() instead.
@@ -136,6 +139,25 @@ void InflationLayer::updateBounds(double robot_x, double robot_y, double robot_y
     *max_x = std::numeric_limits<float>::max();
     *max_y = std::numeric_limits<float>::max();
     need_reinflation_ = false;
+  }
+  else
+  {
+    double tmp_min_x = last_min_x_;
+    double tmp_min_y = last_min_y_;
+    double tmp_max_x = last_max_x_;
+    double tmp_max_y = last_max_y_;
+    last_min_x_ = *min_x;
+    last_min_y_ = *min_y;
+    last_max_x_ = *max_x;
+    last_max_y_ = *max_y;
+    // We need to include in the inflation cells outside the bounding
+    // box by the amount of the cell_inflation_radius_.  Cells
+    // up to that distance outside the box can still influence the costs
+    // stored in cells inside the box.
+    *min_x = std::min(tmp_min_x, *min_x) - inflation_radius_;
+    *min_y = std::min(tmp_min_y, *min_y) - inflation_radius_;
+    *max_x = std::max(tmp_max_x, *max_x) + inflation_radius_;
+    *max_y = std::max(tmp_max_y, *max_y) + inflation_radius_;
   }
 }
 
@@ -154,7 +176,7 @@ void InflationLayer::onFootprintChanged()
 void InflationLayer::updateCosts(costmap_2d::Costmap2D& master_grid, int min_i, int min_j, int max_i,
                                           int max_j)
 {
-  boost::unique_lock < boost::shared_mutex > lock(*access_);
+  boost::unique_lock < boost::recursive_mutex > lock(*inflation_access_);
   if (!enabled_)
     return;
 
@@ -178,20 +200,11 @@ void InflationLayer::updateCosts(costmap_2d::Costmap2D& master_grid, int min_i, 
   }
   memset(seen_, false, size_x * size_y * sizeof(bool));
 
-  // We need to include in the inflation cells outside the bounding
-  // box min_i...max_j, by the amount cell_inflation_radius_.  Cells
-  // up to that distance outside the box can still influence the costs
-  // stored in cells inside the box.
-  min_i -= cell_inflation_radius_;
-  min_j -= cell_inflation_radius_;
-  max_i += cell_inflation_radius_;
-  max_j += cell_inflation_radius_;
-
   min_i = std::max(0, min_i);
   min_j = std::max(0, min_j);
   max_i = std::min(int(size_x), max_i);
   max_j = std::min(int(size_y), max_j);
-
+  
   for (int j = min_j; j < max_j; j++)
   {
     for (int i = min_i; i < max_i; i++)
@@ -326,6 +339,22 @@ void InflationLayer::deleteKernels()
     }
     delete[] cached_costs_;
     cached_costs_ = NULL;
+  }
+}
+
+void InflationLayer::setInflationParameters(double inflation_radius, double cost_scaling_factor)
+{
+  if (weight_ != cost_scaling_factor || inflation_radius_ != inflation_radius)
+  {
+    // Lock here so that reconfiguring the inflation radius doesn't cause segfaults
+    // when accessing the cached arrays
+    boost::unique_lock < boost::recursive_mutex > lock(*inflation_access_);
+
+    inflation_radius_ = inflation_radius;
+    cell_inflation_radius_ = cellDistance(inflation_radius_);
+    weight_ = cost_scaling_factor;
+    need_reinflation_ = true;
+    computeCaches();
   }
 }
 
