@@ -83,6 +83,7 @@ add_library(base_local_planner
 	src/local_planner_util.cpp
 	src/odometry_helper_ros.cpp
 	src/obstacle_cost_function.cpp
+        src/velocity_costmaps_cost_function.cpp
 	src/oscillation_cost_function.cpp
 	src/prefer_forward_cost_function.cpp
 	src/point_grid.cpp
